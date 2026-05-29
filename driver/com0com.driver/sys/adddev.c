@@ -737,10 +737,30 @@ VOID RemoveFdoBus(IN PC0C_FDOBUS_EXTENSION pDevExt)
 {
   int i;
 
-  for (i = 0 ; i < 2 ; i++) {
-    if (pDevExt->childs[i].pDevExt)
-      RemovePdoPort(pDevExt->childs[i].pDevExt);
+  PLIST_ENTRY current;
+  PLIST_ENTRY next;
+  PC0C_CLIENT client;
+  KIRQL oldIrql;
+
+  KeAcquireSpinLock(&pDevExt->listClientsLock, &oldIrql);
+
+  current = pDevExt->listClientsHead.Flink;
+
+  while (current != &pDevExt->listClientsHead) 
+  {
+      next = current->Flink;
+      client = CONTAINING_RECORD(current, C0C_CLIENT, listEntry);
+
+      RemoveEntryList(current);
+
+      RemovePdoPort(&client->pDevExt);
+
+      current = next;
   }
+
+  ASSERT(IsListEmpty(&pDevExt->listClientsHead));
+
+  KeReleaseSpinLock(&pDevExt->listClientsLock, oldIrql);
 
   if (pDevExt->pLowDevObj)
     IoDetachDevice(pDevExt->pLowDevObj);
@@ -804,6 +824,7 @@ ULONG GetPortNum(IN PDEVICE_OBJECT pPhDevObj)
   return num;
 }
 
+// При создании автобуса создаем один начальный COM порт
 NTSTATUS AddFdoBus(IN PDRIVER_OBJECT pDrvObj, IN PDEVICE_OBJECT pPhDevObj)
 {
   NTSTATUS status = STATUS_SUCCESS;
@@ -866,11 +887,11 @@ NTSTATUS AddFdoBus(IN PDRIVER_OBJECT pDrvObj, IN PDEVICE_OBJECT pPhDevObj)
   pNewDevObj->Flags &= ~DO_DEVICE_INITIALIZING;
   KeInitializeSpinLock(&pDevExt->ioLock);
 
-  for (i = 0 ; i < 2 ; i++) {
+  for (i = 0 ; i < 1 ; i++) {
     PC0C_IO_PORT pIoPort;
     int j;
 
-    pIoPort = &pDevExt->childs[i].ioPort;
+    pIoPort = &pDevExt->clients[i].ioPort;
 
     pIoPort->pIoLock = &pDevExt->ioLock;
 
@@ -882,18 +903,22 @@ NTSTATUS AddFdoBus(IN PDRIVER_OBJECT pDrvObj, IN PDEVICE_OBJECT pPhDevObj)
 #endif /* DBG */
     }
 
-    pIoPort->pIoPortRemote = &pDevExt->childs[(i + 1) % 2].ioPort;
+    InitializeListHead(&pDevExt->listClientsHead);
+
+
+
+    pIoPort->pIoPortRemote = &pDevExt->clients[(i + 1) % 2].ioPort;
 
     status = AddPdoPort(pDrvObj,
                         num,
                         (BOOLEAN)(i ? FALSE : TRUE),
                         pDevExt,
                         pIoPort,
-                        &pDevExt->childs[i].pDevExt);
+                        &pDevExt->clients[i].pDevExt);
 
     if (!NT_SUCCESS(status)) {
       SysLogDev(pNewDevObj, status, L"AddFdoBus AddPdoPort FAIL");
-      pDevExt->childs[i].pDevExt = NULL;
+      pDevExt->clients[i].pDevExt = NULL;
       goto clean;
     }
   }

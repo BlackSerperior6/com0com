@@ -418,17 +418,30 @@ typedef struct _C0C_FDOPORT_EXTENSION {
 
 } C0C_FDOPORT_EXTENSION, *PC0C_FDOPORT_EXTENSION;
 
-typedef struct _C0C_CHILD {
+typedef struct _C0C_CLIENT {
+  LIST_ENTRY              childrensList;
+  LIST_ENTRY              listEntry;
+  PC0C_CLIENT             parent;
+  KSPIN_LOCK              ioLock;
   PC0C_PDOPORT_EXTENSION  pDevExt;
   C0C_IO_PORT             ioPort;
-} C0C_CHILD, *PC0C_CHILD;
+} C0C_CLIENT, *PC0C_CLIENT;
+
+typedef struct _C0C_TREE_NODE 
+{
+    PC0C_CLIENT attachedClient;
+    LIST_ENTRY listEntry;
+
+} C0C_TREE_NODE, *PC0C_TREE_NODE;
 
 typedef struct _C0C_FDOBUS_EXTENSION {
   FDO_EXTENSION
 
   LIST_ENTRY              listEntry;
+  LIST_ENTRY              listClientsHead;
+  KSPIN_LOCK              listClientsLock;
   KSPIN_LOCK              ioLock;
-  C0C_CHILD               childs[2];
+  C0C_CLIENT              clients[2];
   ULONG                   portNum;
 } C0C_FDOBUS_EXTENSION, *PC0C_FDOBUS_EXTENSION;
 

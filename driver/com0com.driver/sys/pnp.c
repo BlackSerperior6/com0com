@@ -103,7 +103,7 @@ NTSTATUS FdoBusPnp(
 
       countPdos = 0;
       for (i = 0 ; i < 2 ; i++) {
-        if (pDevExt->childs[i].pDevExt)
+        if (pDevExt->clients[i].pDevExt)
           countPdos++;
       }
 
@@ -128,10 +128,10 @@ NTSTATUS FdoBusPnp(
       for (i = 0 ; i < 2 ; i++) {
         PC0C_PDOPORT_EXTENSION  pPhDevExt;
 
-        pPhDevExt = pDevExt->childs[i].pDevExt;
+        pPhDevExt = pDevExt->clients[i].pDevExt;
 
         if (pPhDevExt) {
-          if (!pDevExt->childs[i].ioPort.pDevExt) {
+          if (!pDevExt->clients[i].ioPort.pDevExt) {
             UNICODE_STRING portName;
             UNICODE_STRING portRegistryPath;
 
@@ -146,10 +146,10 @@ NTSTATUS FdoBusPnp(
             if (NT_SUCCESS(status) && portName.Length &&
                 _wcsicmp(C0C_PORT_NAME_COMCLASS, portName.Buffer) == 0)
             {
-              pDevExt->childs[i].ioPort.isComClass = TRUE;
+              pDevExt->clients[i].ioPort.isComClass = TRUE;
               Trace0((PC0C_COMMON_EXTENSION)pPhDevExt, L"Port class set to COM");
             } else {
-              pDevExt->childs[i].ioPort.isComClass = FALSE;
+              pDevExt->clients[i].ioPort.isComClass = FALSE;
               Trace0((PC0C_COMMON_EXTENSION)pPhDevExt, L"Port class set to CNC");
             }
 
@@ -256,7 +256,7 @@ NTSTATUS PdoPortQueryCaps(
   pCaps->UniqueID = TRUE;
 
   pCaps->Address = pCaps->UINumber =
-    (pDevExt->pIoPortLocal == &pDevExt->pBusExt->childs[0].ioPort ? 0 : 1);
+    (pDevExt->pIoPortLocal == &pDevExt->pBusExt->clients[0].ioPort ? 0 : 1);
 
   return STATUS_SUCCESS;
 }
