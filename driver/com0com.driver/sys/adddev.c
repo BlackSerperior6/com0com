@@ -572,11 +572,57 @@ NTSTATUS AddFdoPort(IN PDRIVER_OBJECT pDrvObj, IN PDEVICE_OBJECT pPhDevObj)
     pDevExt->symbolicLinkName.Buffer = NULL;
   }
 
-  if (!pDevExt->pIoPortLocal->plugInMode || pDevExt->pIoPortLocal->pIoPortRemote->isOpen) {
-    if (!ShowPort(pDevExt))
-      SysLogDev(pDevExt->pDevObj, STATUS_UNSUCCESSFUL, L"AddFdoPort ShowPort FAIL");
-  } else {
-    HidePortName(pDevExt);
+  if (!pDevExt->pIoPortLocal->plugInMode)
+  {
+      PC0C_IO_PORT localPort = pDevExt->pIoPortLocal;
+      PLIST_ENTRY current;
+      PLIST_ENTRY next;
+      PC0C_IO_PORT client;
+      KIRQL oldIrql;
+
+      BOOLEAN shouldShowPort = localPort->pParentPort != NULL && localPort->pParentPort->isOpen;
+
+      if (shouldShowPort)
+      {
+          if (!ShowPort(pDevExt))
+              SysLogDev(pDevExt->pDevObj, STATUS_UNSUCCESSFUL, L"AddFdoPort ShowPort FAIL");
+      }
+      else
+      {
+          KeAcquireSpinLock(&localPort->pListLock, &oldIrql);
+
+          current = localPort->childrensList.Flink;
+
+          while (current != &localPort->childrensList)
+          {
+              next = current->Flink;
+              client = CONTAINING_RECORD(current, C0C_IO_PORT, listEntry);
+
+              if (client->isOpen)
+              {
+                  shouldShowPort = TRUE;
+                  break;
+              }
+
+              current = next;
+          }
+
+          KeReleaseSpinLock(&localPort->pListLock, oldIrql);
+
+          if (shouldShowPort)
+          {
+              if (!ShowPort(pDevExt))
+                  SysLogDev(pDevExt->pDevObj, STATUS_UNSUCCESSFUL, L"AddFdoPort ShowPort FAIL");
+          }
+          else
+          {
+              HidePortName(pDevExt);
+          }   
+      }
+  }
+  else
+  {
+      HidePortName(pDevExt);
   }
 
   status = STATUS_SUCCESS;
