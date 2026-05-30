@@ -291,7 +291,7 @@ typedef struct _C0C_IO_PORT {
 
   PDEVICE_OBJECT          pPhDevObj;
   LIST_ENTRY              listEntry; //List of children ports
-  struct _C0C_IO_PORT* pParentPort;
+  struct _C0C_IO_PORT*    pParentPort;
   struct _C0C_IO_PORT     *pIoPortRemote; //TODO Remove
   PKSPIN_LOCK             pIoLock;
 
@@ -438,7 +438,6 @@ typedef struct _C0C_FDOBUS_EXTENSION {
   ULONG                   clientsListCount;
   KSPIN_LOCK              listClientsLock;
   KSPIN_LOCK              ioLock;
-  C0C_CLIENT              clients[2];
   ULONG                   portNum;
 } C0C_FDOBUS_EXTENSION, *PC0C_FDOBUS_EXTENSION;
 

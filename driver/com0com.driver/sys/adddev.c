@@ -935,11 +935,10 @@ NTSTATUS AddFdoBus(IN PDRIVER_OBJECT pDrvObj, IN PDEVICE_OBJECT pPhDevObj)
   }
 
   pNewDevObj->Flags &= ~DO_DEVICE_INITIALIZING;
+
   KeInitializeSpinLock(&pDevExt->ioLock);
 
   status = AttachPdoPortToBus(pDrvObj, pDevExt, pNewDevObj, num);
-
-  KeReleaseSpinLock(pDevExt->ioLock);
 
   if (!NT_SUCCESS(status)) {
       SysLogDev(pNewDevObj, status, L"AddFdoBus AddPdoPort FAIL");

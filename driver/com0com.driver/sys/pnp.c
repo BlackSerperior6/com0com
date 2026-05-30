@@ -101,11 +101,29 @@ NTSTATUS FdoBusPnp(
       PDEVICE_RELATIONS pRelationsPrev, pRelations;
       int i;
 
+      PLIST_ENTRY current;
+      PLIST_ENTRY next;
+      PC0C_CLIENT client;
+      KIRQL oldIrql;
+
       countPdos = 0;
-      for (i = 0 ; i < 2 ; i++) {
-        if (pDevExt->clients[i].pDevExt)
-          countPdos++;
+
+      KeAcquireSpinLock(&pDevExt->listClientsLock, &oldIrql);
+
+      current = pDevExt->listClientsHead.Flink;
+
+      while (current != &pDevExt->listClientsHead)
+      {
+          next = current->Flink;
+          client = CONTAINING_RECORD(current, C0C_CLIENT, listEntry);
+
+          if (client->pDevExt)
+              countPdos++;
+
+          current = next;
       }
+
+      KeReleaseSpinLock(&pDevExt->listClientsLock, oldIrql);
 
       if (!countPdos)
         break;
@@ -125,43 +143,58 @@ NTSTATUS FdoBusPnp(
         RtlCopyMemory(pRelations->Objects, pRelationsPrev->Objects,
                                       countRelations * sizeof (PDEVICE_OBJECT));
 
-      for (i = 0 ; i < 2 ; i++) {
-        PC0C_PDOPORT_EXTENSION  pPhDevExt;
+      KeAcquireSpinLock(&pDevExt->listClientsLock, &oldIrql);
 
-        pPhDevExt = pDevExt->clients[i].pDevExt;
+      current = pDevExt->listClientsHead.Flink;
 
-        if (pPhDevExt) {
-          if (!pDevExt->clients[i].ioPort.pDevExt) {
-            UNICODE_STRING portName;
-            UNICODE_STRING portRegistryPath;
+      while (current != &pDevExt->listClientsHead)
+      {
+          next = current->Flink;
+          client = CONTAINING_RECORD(current, C0C_CLIENT, listEntry);
 
-            RtlInitUnicodeString(&portRegistryPath, NULL);
-            StrAppendPortParametersRegistryPath(&status, &portRegistryPath, pPhDevExt->portName);
+          PC0C_PDOPORT_EXTENSION  pPhDevExt;
 
-            RtlInitUnicodeString(&portName, NULL);
-            StrAppendParameterPortName(&status, &portName, portRegistryPath.Buffer);
+          pPhDevExt = client->pDevExt;
 
-            StrFree(&portRegistryPath);
+          if (pPhDevExt) 
+          {
+              if (!client->ioPort.pDevExt)
+              {
+                  UNICODE_STRING portName;
+                  UNICODE_STRING portRegistryPath;
 
-            if (NT_SUCCESS(status) && portName.Length &&
-                _wcsicmp(C0C_PORT_NAME_COMCLASS, portName.Buffer) == 0)
-            {
-              pDevExt->clients[i].ioPort.isComClass = TRUE;
-              Trace0((PC0C_COMMON_EXTENSION)pPhDevExt, L"Port class set to COM");
-            } else {
-              pDevExt->clients[i].ioPort.isComClass = FALSE;
-              Trace0((PC0C_COMMON_EXTENSION)pPhDevExt, L"Port class set to CNC");
-            }
+                  RtlInitUnicodeString(&portRegistryPath, NULL);
+                  StrAppendPortParametersRegistryPath(&status, &portRegistryPath, pPhDevExt->portName);
 
-            StrFree(&portName);
+                  RtlInitUnicodeString(&portName, NULL);
+                  StrAppendParameterPortName(&status, &portName, portRegistryPath.Buffer);
 
-            status = STATUS_SUCCESS;
+                  StrFree(&portRegistryPath);
+
+                  if (NT_SUCCESS(status) && portName.Length &&
+                      _wcsicmp(C0C_PORT_NAME_COMCLASS, portName.Buffer) == 0)
+                  {
+                      client->ioPort.isComClass = TRUE;
+                      Trace0((PC0C_COMMON_EXTENSION)pPhDevExt, L"Port class set to COM");
+                  }
+                  else {
+                      client->ioPort.isComClass = FALSE;
+                      Trace0((PC0C_COMMON_EXTENSION)pPhDevExt, L"Port class set to CNC");
+                  }
+
+                  StrFree(&portName);
+
+                  status = STATUS_SUCCESS;
+              }
+
+              pRelations->Objects[countRelations++] = pPhDevExt->pDevObj;
+              ObReferenceObject(pPhDevExt->pDevObj);
           }
 
-          pRelations->Objects[countRelations++] = pPhDevExt->pDevObj;
-          ObReferenceObject(pPhDevExt->pDevObj);
-        }
+          current = next;
       }
+
+      KeReleaseSpinLock(&pDevExt->listClientsLock, oldIrql);
 
       pRelations->Count = countRelations;
 
@@ -255,10 +288,39 @@ NTSTATUS PdoPortQueryCaps(
 
   pCaps->UniqueID = TRUE;
 
-  pCaps->Address = pCaps->UINumber =
-    (pDevExt->pIoPortLocal == &pDevExt->pBusExt->clients[0].ioPort ? 0 : 1);
+  ULONG counter = 0;
+  BOOLEAN foundPort = FALSE;
 
-  return STATUS_SUCCESS;
+  PLIST_ENTRY current;
+  PLIST_ENTRY next;
+  PC0C_CLIENT client;
+  KIRQL oldIrql;
+
+  PC0C_FDOBUS_EXTENSION busExt = pDevExt->pBusExt;
+
+  KeAcquireSpinLock(&busExt->listClientsLock, &oldIrql);
+
+  current = busExt->listClientsHead.Flink;
+
+  while (current != &busExt->listClientsHead)
+  {
+      next = current->Flink;
+      client = CONTAINING_RECORD(current, C0C_CLIENT, listEntry);
+
+      if (pDevExt->pIoPortLocal == &client->ioPort)
+      {
+          pCaps->Address = pCaps->UINumber = counter;
+          foundPort = TRUE;
+          break;
+      }
+
+      counter++;
+      current = next;
+  }
+
+  KeReleaseSpinLock(&busExt->listClientsLock, oldIrql);
+
+  return foundPort ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 }
 
 NTSTATUS PdoPortQueryDevText(
