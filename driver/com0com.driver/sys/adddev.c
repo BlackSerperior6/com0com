@@ -604,7 +604,7 @@ VOID RemovePdoPort(IN PC0C_PDOPORT_EXTENSION pDevExt)
 NTSTATUS AddPdoPort(
     IN PDRIVER_OBJECT pDrvObj,
     IN ULONG num,
-    IN BOOLEAN isA,
+    IN ULONG portNum,
     IN PC0C_FDOBUS_EXTENSION pBusExt,
     IN PC0C_IO_PORT pIoPortLocal,
     OUT PC0C_PDOPORT_EXTENSION *ppDevExt)
@@ -614,15 +614,14 @@ NTSTATUS AddPdoPort(
   PDEVICE_OBJECT pNewDevObj;
   UNICODE_STRING ntDeviceName;
   PC0C_PDOPORT_EXTENSION pDevExt = NULL;
-
   status = STATUS_SUCCESS;
 
   RtlInitUnicodeString(&portName, NULL);
-  StrAppendStr0(&status, &portName, isA ? C0C_PREF_PORT_NAME_A : C0C_PREF_PORT_NAME_B);
+  StrAppendStr0(&status, &portName, "C0C_PREF_PORT_NAME_" + portNum);
   StrAppendNum(&status, &portName, num, 10);
 
   RtlInitUnicodeString(&ntDeviceName, NULL);
-  StrAppendStr0(&status, &ntDeviceName, isA ? C0C_PREF_DEVICE_NAME_A : C0C_PREF_DEVICE_NAME_B);
+  StrAppendStr0(&status, &ntDeviceName, "C0C_PREF_DEVICE_NAME_" + portNum);
   StrAppendNum(&status, &ntDeviceName, num, 10);
 
   if (!NT_SUCCESS(status)) {
@@ -824,6 +823,57 @@ ULONG GetPortNum(IN PDEVICE_OBJECT pPhDevObj)
   return num;
 }
 
+NTSTATUS AttachPdoPortToBus(IN PDRIVER_OBJECT pDrvObj, 
+    IN PC0C_FDOBUS_EXTENSION pDevExt, 
+    IN PDEVICE_OBJECT pNewDevObj,
+    IN ULONG num)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+
+    PC0C_IO_PORT pIoPort;
+    PC0C_CLIENT clientToAdd = NULL;
+    int j;
+
+    pIoPort = &clientToAdd->ioPort;
+
+    pIoPort->pIoLock = &pDevExt->ioLock;
+
+    for (j = 0; j < C0C_QUEUE_SIZE; j++) {
+        InitializeListHead(&pIoPort->irpQueues[j].queue);
+        pIoPort->irpQueues[j].pCurrent = NULL;
+#if DBG
+        pIoPort->irpQueues[j].started = FALSE;
+#endif /* DBG */
+    }
+
+    if (!&pDevExt->clientsListInit)
+    {
+        InitializeListHead(&pDevExt->listClientsHead);
+        pDevExt->clientsListInit = TRUE;
+    }
+
+    //pIoPort->pIoPortRemote = &pDevExt->clients[(i + 1) % 2].ioPort;
+
+    status = AddPdoPort(pDrvObj,
+                        num,
+                        ++pDevExt->clientsListCount,
+                        pDevExt,
+                        pIoPort,
+                        &clientToAdd->pDevExt);
+
+    if (!NT_SUCCESS(status))
+    {
+        clientToAdd->pDevExt = NULL;
+        return status;
+    } 
+
+    InitializeListHead(&clientToAdd->portsList);
+
+    InsertTailList(&pDevExt->listClientsHead, &clientToAdd->listEntry);
+
+    return status;
+}
+
 // При создании автобуса создаем один начальный COM порт
 NTSTATUS AddFdoBus(IN PDRIVER_OBJECT pDrvObj, IN PDEVICE_OBJECT pPhDevObj)
 {
@@ -887,40 +937,13 @@ NTSTATUS AddFdoBus(IN PDRIVER_OBJECT pDrvObj, IN PDEVICE_OBJECT pPhDevObj)
   pNewDevObj->Flags &= ~DO_DEVICE_INITIALIZING;
   KeInitializeSpinLock(&pDevExt->ioLock);
 
-  for (i = 0 ; i < 1 ; i++) {
-    PC0C_IO_PORT pIoPort;
-    int j;
+  status = AttachPdoPortToBus(pDrvObj, pDevExt, pNewDevObj, num);
 
-    pIoPort = &pDevExt->clients[i].ioPort;
+  KeReleaseSpinLock(pDevExt->ioLock);
 
-    pIoPort->pIoLock = &pDevExt->ioLock;
-
-    for (j = 0 ; j < C0C_QUEUE_SIZE ; j++) {
-      InitializeListHead(&pIoPort->irpQueues[j].queue);
-      pIoPort->irpQueues[j].pCurrent = NULL;
-#if DBG
-      pIoPort->irpQueues[j].started = FALSE;
-#endif /* DBG */
-    }
-
-    InitializeListHead(&pDevExt->listClientsHead);
-
-
-
-    pIoPort->pIoPortRemote = &pDevExt->clients[(i + 1) % 2].ioPort;
-
-    status = AddPdoPort(pDrvObj,
-                        num,
-                        (BOOLEAN)(i ? FALSE : TRUE),
-                        pDevExt,
-                        pIoPort,
-                        &pDevExt->clients[i].pDevExt);
-
-    if (!NT_SUCCESS(status)) {
+  if (!NT_SUCCESS(status)) {
       SysLogDev(pNewDevObj, status, L"AddFdoBus AddPdoPort FAIL");
-      pDevExt->clients[i].pDevExt = NULL;
       goto clean;
-    }
   }
 
   Trace0((PC0C_COMMON_EXTENSION)pDevExt, L"AddFdoBus OK");

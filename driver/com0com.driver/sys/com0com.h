@@ -290,7 +290,9 @@ typedef struct _C0C_IO_PORT {
   struct _C0C_FDOPORT_EXTENSION *pDevExt;
 
   PDEVICE_OBJECT          pPhDevObj;
-  struct _C0C_IO_PORT     *pIoPortRemote;
+  LIST_ENTRY              listEntry; //List of children ports
+  struct _C0C_IO_PORT* pParentPort;
+  struct _C0C_IO_PORT     *pIoPortRemote; //TODO Remove
   PKSPIN_LOCK             pIoLock;
 
   #define C0C_QUEUE_READ  0
@@ -419,7 +421,7 @@ typedef struct _C0C_FDOPORT_EXTENSION {
 } C0C_FDOPORT_EXTENSION, *PC0C_FDOPORT_EXTENSION;
 
 typedef struct _C0C_CLIENT {
-  LIST_ENTRY              childrensList;
+  LIST_ENTRY              portsList;
   LIST_ENTRY              listEntry;
   PC0C_CLIENT             parent;
   KSPIN_LOCK              ioLock;
@@ -427,18 +429,13 @@ typedef struct _C0C_CLIENT {
   C0C_IO_PORT             ioPort;
 } C0C_CLIENT, *PC0C_CLIENT;
 
-typedef struct _C0C_TREE_NODE 
-{
-    PC0C_CLIENT attachedClient;
-    LIST_ENTRY listEntry;
-
-} C0C_TREE_NODE, *PC0C_TREE_NODE;
-
 typedef struct _C0C_FDOBUS_EXTENSION {
   FDO_EXTENSION
 
   LIST_ENTRY              listEntry;
   LIST_ENTRY              listClientsHead;
+  BOOLEAN                 clientsListInit;
+  ULONG                   clientsListCount;
   KSPIN_LOCK              listClientsLock;
   KSPIN_LOCK              ioLock;
   C0C_CLIENT              clients[2];
