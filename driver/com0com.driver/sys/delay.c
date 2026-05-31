@@ -113,7 +113,10 @@ VOID WriteDelayRoutine(
 
         InitializeListHead(&queueToComplete);
 
-        if (pWriteDelay->started) {
+        KeAcquireSpinLock(pIoPort->pIoLock, &oldIrql);
+
+        if (pWriteDelay->started) 
+        {
             pWriteDelay->idleCount++;
 
             ReadWrite(
@@ -141,6 +144,8 @@ VOID WriteDelayRoutine(
                 }
             }
         }
+
+        KeReleaseSpinLock(pIoPort->pIoLock, oldIrql);
 
         FdoPortCompleteQueue(&queueToComplete);
     }
