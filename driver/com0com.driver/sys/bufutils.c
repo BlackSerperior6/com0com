@@ -225,272 +225,329 @@ VOID CopyCharsWithEscape(
       readDone += writeDone;
     }
   }
-  else {
+  else 
+  {
     PC0C_IO_PORT pIoPort = pFlowFilter->pIoPort;
-    PC0C_IO_PORT pIoPortRemote = pIoPort->pIoPortRemote;
-    UCHAR dataMask;
 
+    PLIST_ENTRY current;
+    PLIST_ENTRY next;
+    PC0C_IO_PORT childPort;
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&pIoPort->listLock, &oldIrql);
+    current = pIoPort->childrensList.Flink;
+
+    while (current != &pIoPort->childrensList)
     {
-      static const UCHAR masks[] = {0x00, 0x01, 0x03, 0x07, 0x0F, 0x1F, 0x3F, 0x7F, 0xFF};
-      UCHAR wordLength = 8;
+        next = current->Flink;
+        childPort = CONTAINING_RECORD(current, C0C_IO_PORT, listEntry);
 
-      if (!pIoPort->allDataBits && wordLength > pIoPort->lineControl.WordLength)
-        wordLength = pIoPort->lineControl.WordLength;
+        UCHAR dataMask;
 
-      if (!pIoPortRemote->allDataBits && wordLength > pIoPortRemote->lineControl.WordLength)
-        wordLength = pIoPortRemote->lineControl.WordLength;
-
-      dataMask = masks[wordLength];
-    }
-
-    for (writeDone = 0 ; writeDone < writeLength && (readLength || pReadBuf == NULL) ; writeDone++) {
-      UCHAR curChar;
-      UCHAR lsr = 0;
-
-      if (pWriteBuf) {
-        if (pIoPortRemote->sendBreak) {
-          pIoPortRemote->sendBreak = FALSE;
-          pIoPort->rcvdBreak = TRUE;
-          BreakError(pIoPort, &lsr);
-          pFlowFilter->events |= SERIAL_EV_BREAK;
-
-          curChar = 0x00;  /* -----------____________ */
-                           /* iiiiiiiiiiis00000000bbb */
-                           /* dddddddddddt\______/rrr */
-                           /* llllllllllla  0x00  eee */
-                           /* eeeeeeeeeeer        aaa */
-                           /*            t        kkk */
-        } else {
-          if ((pIoPortRemote->writeHolding & SERIAL_TX_WAITING_ON_BREAK) == 0) {
-            if (pIoPortRemote->brokeChars) {
-              pIoPortRemote->brokeChars--;
-              curChar = GarbageChar(pIoPortRemote, pIoPort, &lsr);
-            } else {
-              curChar = *pWriteBuf++;
-
-              if (pIoPortRemote->brokeCharsProbability > 0)
-                BrokeChar(pIoPortRemote, pIoPort, &curChar, &lsr);
-            }
-          } else {
-            if (pIoPortRemote->brokeCharsProbability <= 0 ||
-                GetBrokenChars(pIoPortRemote->brokeCharsProbability, 1) == 0)
-            {
-              continue;
-            }
-
-            BreakError(pIoPort, &lsr);
-            pFlowFilter->events |= SERIAL_EV_BREAK;
-
-            curChar = 0x00;  /* __________-____________ */
-                             /* bbbbbbbbbbss00000000bbb */
-                             /* rrrrrrrrrrtt\______/rrr */
-                             /* eeeeeeeeeeoa  0x00  eee */
-                             /* aaaaaaaaaapr        aaa */
-                             /* kkkkkkkkkk t        kkk */
-          }
-        }
-      } else {
-        if (pIoPort->rcvdBreak) {
-          /* emulate one noise impulse for BREAK state */
-
-          BreakError(pIoPort, &lsr);
-          pFlowFilter->events |= SERIAL_EV_BREAK;
-
-          curChar = 0x00;  /* __________-____________ */
-                           /* bbbbbbbbbbss00000000bbb */
-                           /* rrrrrrrrrrtt\______/rrr */
-                           /* eeeeeeeeeeoa  0x00  eee */
-                           /* aaaaaaaaaapr        aaa */
-                           /* kkkkkkkkkk t        kkk */
-        } else {
-          /* emulate one noise impulse for IDLE state */
-
-          curChar = 0xFF;  /* ----------_------------ */
-                           /* iiiiiiiiiis11111111siii */
-                           /* ddddddddddt\______/tddd */
-                           /* lllllllllla  0xFF  olll */
-                           /* eeeeeeeeeer        peee */
-                           /*           t             */
-        }
-      }
-
-      curChar &= dataMask;
-      pFlowFilter->rxCount++;
-
-      if (lsr) {
-        BOOLEAN noCurChar = FALSE;
-        BOOLEAN isBreak = ((lsr & 0x10) != 0);
-        pFlowFilter->events |= SERIAL_EV_ERR;
-
-        if (pIoPort->escapeChar &&
-            ((pIoPort->insertMask & C0CE_INSERT_ENABLE_LSR) != 0 ||
-             (isBreak && (pIoPort->insertMask & C0CE_INSERT_ENABLE_LSR_BI) != 0)))
         {
-          UCHAR buf[4];
-          SIZE_T length = sizeof(buf);
-          SIZE_T len;
+            static const UCHAR masks[] = { 0x00, 0x01, 0x03, 0x07, 0x0F, 0x1F, 0x3F, 0x7F, 0xFF };
+            UCHAR wordLength = 8;
 
-          lsr |= 0x81;    /* errornous data in FIFO and data available */
+            if (!pIoPort->allDataBits && wordLength > pIoPort->lineControl.WordLength)
+                wordLength = pIoPort->lineControl.WordLength;
 
-          if (C0C_TX_BUFFER_THR_EMPTY(&pIoPort->txBuf)) {
-            lsr |= 0x20;  /* transmit holding register empty */
+            if (!childPort->allDataBits && wordLength > childPort->lineControl.WordLength)
+                wordLength = childPort->lineControl.WordLength;
 
-            if (C0C_TX_BUFFER_EMPTY(&pIoPort->txBuf))
-              lsr |= 0x40;  /* transmit holding register empty and line is idle */
-          }
-
-          if ((pIoPort->insertMask & C0CE_INSERT_ENABLE_LSR_BI) != 0 && pIoPort->rcvdBreak)
-            lsr |= 0x10;  /* break interrupt indicator */
-
-          buf[0] = pIoPort->escapeChar;
-          buf[1] = SERIAL_LSRMST_LSR_DATA;
-          buf[2] = lsr;
-          buf[3] = curChar;
-
-          noCurChar = TRUE;
-
-          if (length > readLength)
-            len = readLength;
-          else
-            len = length;
-
-          if (len) {
-            RtlCopyMemory(pReadBuf, buf, len);
-            pReadBuf += len;
-            readDone += len;
-            readLength -= len;
-            length -= len;
-          }
-
-          if (length) {
-            if (pReadBuf == NULL) {
-              readDone += length;
-            } else {
-#if DBG
-              SIZE_T done =
-#endif /* DBG */
-              AddRawData(&pBuf->insertData, buf + len, length);
-#if DBG
-              HALT_UNLESS2(done == length, done, length);
-#endif /* DBG */
-            }
-          }
+            dataMask = masks[wordLength];
         }
 
-        if (isBreak) {
-          if (pIoPort->handFlow.FlowReplace & SERIAL_BREAK_CHAR) {
-            UCHAR errorChar = pIoPort->specialChars.BreakChar;
+        for (writeDone = 0; writeDone < writeLength && (readLength || pReadBuf == NULL); writeDone++) 
+        {
+            UCHAR curChar;
+            UCHAR lsr = 0;
 
-            if (!readLength) {
-              if (pReadBuf == NULL) {
-                readDone++;
-              } else {
-#if DBG
-                SIZE_T done =
-#endif /* DBG */
-                AddRawData(&pBuf->insertData, &errorChar, sizeof(errorChar));
-#if DBG
-                HALT_UNLESS1(done == sizeof(errorChar), done);
-#endif /* DBG */
-              }
-            } else {
-              *pReadBuf++ = errorChar;
-              readLength--;
-              readDone++;
+            if (pWriteBuf) 
+            {
+                if (childPort->sendBreak) 
+                {
+                    childPort->sendBreak = FALSE;
+                    pIoPort->rcvdBreak = TRUE;
+                    BreakError(pIoPort, &lsr);
+                    pFlowFilter->events |= SERIAL_EV_BREAK;
+
+                    curChar = 0x00;  /* -----------____________ */
+                                     /* iiiiiiiiiiis00000000bbb */
+                                     /* dddddddddddt\______/rrr */
+                                     /* llllllllllla  0x00  eee */
+                                     /* eeeeeeeeeeer        aaa */
+                                     /*            t        kkk */
+                }
+                else 
+                {
+                    if ((childPort->writeHolding & SERIAL_TX_WAITING_ON_BREAK) == 0) 
+                    {
+                        if (childPort->brokeChars) 
+                        {
+                            childPort->brokeChars--;
+                            curChar = GarbageChar(childPort, pIoPort, &lsr);
+                        }
+                        else 
+                        {
+                            curChar = *pWriteBuf++;
+
+                            if (childPort->brokeCharsProbability > 0)
+                                BrokeChar(childPort, pIoPort, &curChar, &lsr);
+                        }
+                    }
+                    else 
+                    {
+                        if (childPort->brokeCharsProbability <= 0 ||
+                            GetBrokenChars(childPort->brokeCharsProbability, 1) == 0)
+                        {
+                            continue;
+                        }
+
+                        BreakError(pIoPort, &lsr);
+                        pFlowFilter->events |= SERIAL_EV_BREAK;
+
+                        curChar = 0x00;  /* __________-____________ */
+                                         /* bbbbbbbbbbss00000000bbb */
+                                         /* rrrrrrrrrrtt\______/rrr */
+                                         /* eeeeeeeeeeoa  0x00  eee */
+                                         /* aaaaaaaaaapr        aaa */
+                                         /* kkkkkkkkkk t        kkk */
+                    }
+                }
             }
-          }
+            else 
+            {
+                if (pIoPort->rcvdBreak) 
+                {
+                    /* emulate one noise impulse for BREAK state */
+
+                    BreakError(pIoPort, &lsr);
+                    pFlowFilter->events |= SERIAL_EV_BREAK;
+
+                    curChar = 0x00;  /* __________-____________ */
+                                     /* bbbbbbbbbbss00000000bbb */
+                                     /* rrrrrrrrrrtt\______/rrr */
+                                     /* eeeeeeeeeeoa  0x00  eee */
+                                     /* aaaaaaaaaapr        aaa */
+                                     /* kkkkkkkkkk t        kkk */
+                }
+                else {
+                    /* emulate one noise impulse for IDLE state */
+
+                    curChar = 0xFF;  /* ----------_------------ */
+                                     /* iiiiiiiiiis11111111siii */
+                                     /* ddddddddddt\______/tddd */
+                                     /* lllllllllla  0xFF  olll */
+                                     /* eeeeeeeeeer        peee */
+                                     /*           t             */
+                }
+            }
+
+            curChar &= dataMask;
+            pFlowFilter->rxCount++;
+
+            if (lsr) 
+            {
+                BOOLEAN noCurChar = FALSE;
+                BOOLEAN isBreak = ((lsr & 0x10) != 0);
+                pFlowFilter->events |= SERIAL_EV_ERR;
+
+                if (pIoPort->escapeChar &&
+                    ((pIoPort->insertMask & C0CE_INSERT_ENABLE_LSR) != 0 ||
+                        (isBreak && (pIoPort->insertMask & C0CE_INSERT_ENABLE_LSR_BI) != 0)))
+                {
+                    UCHAR buf[4];
+                    SIZE_T length = sizeof(buf);
+                    SIZE_T len;
+
+                    lsr |= 0x81;    /* errornous data in FIFO and data available */
+
+                    if (C0C_TX_BUFFER_THR_EMPTY(&pIoPort->txBuf)) {
+                        lsr |= 0x20;  /* transmit holding register empty */
+
+                        if (C0C_TX_BUFFER_EMPTY(&pIoPort->txBuf))
+                            lsr |= 0x40;  /* transmit holding register empty and line is idle */
+                    }
+
+                    if ((pIoPort->insertMask & C0CE_INSERT_ENABLE_LSR_BI) != 0 && pIoPort->rcvdBreak)
+                        lsr |= 0x10;  /* break interrupt indicator */
+
+                    buf[0] = pIoPort->escapeChar;
+                    buf[1] = SERIAL_LSRMST_LSR_DATA;
+                    buf[2] = lsr;
+                    buf[3] = curChar;
+
+                    noCurChar = TRUE;
+
+                    if (length > readLength)
+                        len = readLength;
+                    else
+                        len = length;
+
+                    if (len) 
+                    {
+                        RtlCopyMemory(pReadBuf, buf, len);
+                        pReadBuf += len;
+                        readDone += len;
+                        readLength -= len;
+                        length -= len;
+                    }
+
+                    if (length) 
+                    {
+                        if (pReadBuf == NULL) 
+                        {
+                            readDone += length;
+                        }
+                        else 
+                        {
+#if DBG
+                            SIZE_T done =
+#endif /* DBG */
+                                AddRawData(&pBuf->insertData, buf + len, length);
+#if DBG
+                            HALT_UNLESS2(done == length, done, length);
+#endif /* DBG */
+                        }
+                    }
+                }
+
+                if (isBreak) 
+                {
+                    if (pIoPort->handFlow.FlowReplace & SERIAL_BREAK_CHAR) {
+                        UCHAR errorChar = pIoPort->specialChars.BreakChar;
+
+                        if (!readLength) 
+                        {
+                            if (pReadBuf == NULL) 
+                            {
+                                readDone++;
+                            }
+                            else 
+                            {
+#if DBG
+                                SIZE_T done =
+#endif /* DBG */
+                                    AddRawData(&pBuf->insertData, &errorChar, sizeof(errorChar));
+#if DBG
+                                HALT_UNLESS1(done == sizeof(errorChar), done);
+#endif /* DBG */
+                            }
+                        }
+                        else 
+                        {
+                            *pReadBuf++ = errorChar;
+                            readLength--;
+                            readDone++;
+                        }
+                    }
+                }
+                else if (pIoPort->handFlow.FlowReplace & SERIAL_ERROR_CHAR) 
+                {
+                        UCHAR errorChar = pIoPort->specialChars.ErrorChar;
+
+                        if (!readLength) 
+                        {
+                            if (pReadBuf == NULL) 
+                            {
+                                readDone++;
+                            }
+                            else 
+                            {
+#if DBG
+                                SIZE_T done =
+#endif /* DBG */
+                                    AddRawData(&pBuf->insertData, &errorChar, sizeof(errorChar));
+#if DBG
+                                HALT_UNLESS1(done == sizeof(errorChar), done);
+#endif /* DBG */
+                            }
+                        }
+                        else 
+                        {
+                            *pReadBuf++ = errorChar;
+                            readLength--;
+                            readDone++;
+                        }
+                    }
+
+                if (noCurChar)
+                    continue;
+            }
+
+            if (pFlowFilter->flags & C0C_FLOW_FILTER_FL_IGNORE_RECEIVED) {
+            }
+            else
+                if (!curChar && (pFlowFilter->flags & C0C_FLOW_FILTER_FL_NULL_STRIPPING)) {
+                }
+                else
+                    if ((pFlowFilter->flags & C0C_FLOW_FILTER_FL_AUTO_TRANSMIT) &&
+                        (curChar == pIoPort->specialChars.XoffChar || curChar == pIoPort->specialChars.XonChar))
+                    {
+                        if (curChar == pIoPort->specialChars.XoffChar)
+                            pFlowFilter->lastXonXoff = C0C_XCHAR_OFF;
+                        else
+                            pFlowFilter->lastXonXoff = C0C_XCHAR_ON;
+                    }
+                    else {
+                        if (!readLength) {
+                            if (pReadBuf == NULL) {
+                                readDone++;
+                            }
+                            else {
+#if DBG
+                                SIZE_T done =
+#endif /* DBG */
+                                    AddRawData(&pBuf->insertData, &curChar, sizeof(curChar));
+#if DBG
+                                HALT_UNLESS1(done == sizeof(curChar), done);
+#endif /* DBG */
+                            }
+                        }
+                        else {
+                            *pReadBuf++ = curChar;
+                            readLength--;
+                            readDone++;
+                        }
+
+                        pFlowFilter->events |= SERIAL_EV_RXCHAR;
+
+                        if ((pIoPort->waitMask & SERIAL_EV_RXFLAG) &&
+                            curChar == pIoPort->specialChars.EventChar)
+                        {
+                            pFlowFilter->events |= SERIAL_EV_RXFLAG;
+                        }
+
+                        if (pIoPort->escapeChar && curChar == pIoPort->escapeChar) {
+                            curChar = SERIAL_LSRMST_ESCAPE;
+
+                            if (!readLength) {
+                                if (pReadBuf == NULL) {
+                                    readDone++;
+                                }
+                                else {
+#if DBG
+                                    SIZE_T done =
+#endif /* DBG */
+                                        AddRawData(&pBuf->insertData, &curChar, sizeof(curChar));
+#if DBG
+                                    HALT_UNLESS1(done == sizeof(curChar), done);
+#endif /* DBG */
+                                }
+                            }
+                            else {
+                                *pReadBuf++ = curChar;
+                                readLength--;
+                                readDone++;
+                            }
+                        }
+                    }
         }
-        else
-        if (pIoPort->handFlow.FlowReplace & SERIAL_ERROR_CHAR) {
-          UCHAR errorChar = pIoPort->specialChars.ErrorChar;
 
-          if (!readLength) {
-            if (pReadBuf == NULL) {
-              readDone++;
-            } else {
-#if DBG
-              SIZE_T done =
-#endif /* DBG */
-              AddRawData(&pBuf->insertData, &errorChar, sizeof(errorChar));
-#if DBG
-              HALT_UNLESS1(done == sizeof(errorChar), done);
-#endif /* DBG */
-            }
-          } else {
-            *pReadBuf++ = errorChar;
-            readLength--;
-            readDone++;
-          }
-        }
-
-        if (noCurChar)
-          continue;
-      }
-
-      if (pFlowFilter->flags & C0C_FLOW_FILTER_FL_IGNORE_RECEIVED) {
-      }
-      else
-      if (!curChar && (pFlowFilter->flags & C0C_FLOW_FILTER_FL_NULL_STRIPPING)) {
-      }
-      else
-      if ((pFlowFilter->flags & C0C_FLOW_FILTER_FL_AUTO_TRANSMIT) &&
-          (curChar == pIoPort->specialChars.XoffChar || curChar == pIoPort->specialChars.XonChar))
-      {
-        if (curChar == pIoPort->specialChars.XoffChar)
-          pFlowFilter->lastXonXoff = C0C_XCHAR_OFF;
-        else
-          pFlowFilter->lastXonXoff = C0C_XCHAR_ON;
-      }
-      else {
-          if (!readLength) {
-            if (pReadBuf == NULL) {
-              readDone++;
-            } else {
-#if DBG
-              SIZE_T done =
-#endif /* DBG */
-              AddRawData(&pBuf->insertData, &curChar, sizeof(curChar));
-#if DBG
-              HALT_UNLESS1(done == sizeof(curChar), done);
-#endif /* DBG */
-            }
-          } else {
-            *pReadBuf++ = curChar;
-            readLength--;
-            readDone++;
-          }
-
-          pFlowFilter->events |= SERIAL_EV_RXCHAR;
-
-          if ((pIoPort->waitMask & SERIAL_EV_RXFLAG) &&
-              curChar == pIoPort->specialChars.EventChar)
-          {
-            pFlowFilter->events |= SERIAL_EV_RXFLAG;
-          }
-
-          if (pIoPort->escapeChar && curChar == pIoPort->escapeChar) {
-            curChar = SERIAL_LSRMST_ESCAPE;
-
-            if (!readLength) {
-              if (pReadBuf == NULL) {
-                readDone++;
-              } else {
-#if DBG
-                SIZE_T done =
-#endif /* DBG */
-                AddRawData(&pBuf->insertData, &curChar, sizeof(curChar));
-#if DBG
-                HALT_UNLESS1(done == sizeof(curChar), done);
-#endif /* DBG */
-              }
-            } else {
-              *pReadBuf++ = curChar;
-              readLength--;
-              readDone++;
-            }
-          }
-      }
+        current = next;
     }
+
+    KeReleaseSpinLock(&pIoPort->listLock, oldIrql);
   }
 
   *pReadDone = readDone;

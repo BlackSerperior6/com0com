@@ -92,45 +92,60 @@ VOID WriteDelayRoutine(
   pIoPort = (PC0C_IO_PORT)deferredContext;
   pWriteDelay = pIoPort->pWriteDelay;
 
-  if (pWriteDelay) {
-    LIST_ENTRY queueToComplete;
+  if (pWriteDelay) 
+  {
+    PLIST_ENTRY current;
+    PLIST_ENTRY next;
+    PC0C_IO_PORT childPort;
     KIRQL oldIrql;
 
-    InitializeListHead(&queueToComplete);
+    KeAcquireSpinLock(pIoPort->listLock, &oldIrql);
 
-    KeAcquireSpinLock(pIoPort->pIoLock, &oldIrql);
+    current = pIoPort->childrensList.Flink;
 
-    if (pWriteDelay->started) {
-      pWriteDelay->idleCount++;
+    while (current != &pIoPort->childrensList) 
+    {
+        next = current->Flink;
+        childPort = CONTAINING_RECORD(current, C0C_IO_PORT, listEntry);
 
-      ReadWrite(
-          pIoPort->pIoPortRemote, FALSE,
-          pIoPort, FALSE,
-          &queueToComplete);
+        KIRQL localOldIrql;
+        LIST_ENTRY queueToComplete;
 
-      if (pWriteDelay->idleCount > 3) {
-        if (pIoPort->brokeCharsProbability > 0 && pIoPort->pIoPortRemote->isOpen) {
-          SIZE_T idleChars = GetWriteLimit(pWriteDelay);
+        InitializeListHead(&queueToComplete);
 
-          pWriteDelay->idleCount = 0;
-          pIoPort->brokeIdleChars += GetBrokenChars(pIoPort->brokeCharsProbability, idleChars);
-          pWriteDelay->sentFrames += idleChars;
+        if (pWriteDelay->started) {
+            pWriteDelay->idleCount++;
 
-          if (pIoPort->brokeIdleChars > 0) {
             ReadWrite(
-                pIoPort->pIoPortRemote, FALSE,
+                childPort, FALSE,
                 pIoPort, FALSE,
                 &queueToComplete);
-          }
-        } else {
-          StopWriteDelayTimer(pWriteDelay);
+
+            if (pWriteDelay->idleCount > 3) {
+                if (pIoPort->brokeCharsProbability > 0 && childPort->isOpen) {
+                    SIZE_T idleChars = GetWriteLimit(pWriteDelay);
+
+                    pWriteDelay->idleCount = 0;
+                    pIoPort->brokeIdleChars += GetBrokenChars(pIoPort->brokeCharsProbability, idleChars);
+                    pWriteDelay->sentFrames += idleChars;
+
+                    if (pIoPort->brokeIdleChars > 0) {
+                        ReadWrite(
+                            childPort, FALSE,
+                            pIoPort, FALSE,
+                            &queueToComplete);
+                    }
+                }
+                else {
+                    StopWriteDelayTimer(pWriteDelay);
+                }
+            }
         }
-      }
+
+        FdoPortCompleteQueue(&queueToComplete);
     }
 
-    KeReleaseSpinLock(pIoPort->pIoLock, oldIrql);
-
-    FdoPortCompleteQueue(&queueToComplete);
+    KeReleaseSpinLock(pIoPort->listLock, oldIrql);
   }
 }
 

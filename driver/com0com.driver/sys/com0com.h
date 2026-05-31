@@ -295,7 +295,7 @@ typedef struct _C0C_IO_PORT {
   struct _C0C_IO_PORT*    pParentPort;
   struct _C0C_IO_PORT     *pIoPortRemote; //TODO Remove
   PKSPIN_LOCK             pIoLock;
-  PKSPIN_LOCK             pListLock;
+  PKSPIN_LOCK             listLock;
 
   #define C0C_QUEUE_READ  0
   #define C0C_QUEUE_WRITE 1
